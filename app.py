@@ -1,3 +1,4 @@
+import math
 import streamlit as st
 from supabase import create_client, Client
 
@@ -22,7 +23,6 @@ st.set_page_config(
 def init_supabase():
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
-
     return create_client(url, key)
 
 
@@ -36,16 +36,21 @@ supabase: Client = init_supabase()
 if "page" not in st.session_state:
     st.session_state.page = "Dashboard"
 
+if "job_data" not in st.session_state:
+    st.session_state.job_data = {}
+
+if "calculation_result" not in st.session_state:
+    st.session_state.calculation_result = {}
+
 
 # ============================================================
 # DATABASE FUNCTIONS
 # ============================================================
 
 def get_jobs():
-    """
-    Retrieve all jobs from Supabase.
-    """
+
     try:
+
         response = (
             supabase
             .table("jobs")
@@ -57,15 +62,18 @@ def get_jobs():
         return response.data
 
     except Exception as e:
-        st.error(f"Unable to retrieve jobs: {e}")
+
+        st.error(
+            f"Unable to retrieve jobs: {e}"
+        )
+
         return []
 
 
 def save_job(job_data):
-    """
-    Save a new job to Supabase.
-    """
+
     try:
+
         response = (
             supabase
             .table("jobs")
@@ -76,6 +84,7 @@ def save_job(job_data):
         return True, response
 
     except Exception as e:
+
         return False, str(e)
 
 
@@ -86,7 +95,10 @@ def save_job(job_data):
 with st.sidebar:
 
     st.title("🔧 KHAL")
-    st.caption("Maintenance Engineering")
+
+    st.caption(
+        "Maintenance Engineering"
+    )
 
     st.divider()
 
@@ -96,6 +108,7 @@ with st.sidebar:
         "🏠 Dashboard",
         use_container_width=True
     ):
+
         st.session_state.page = "Dashboard"
         st.rerun()
 
@@ -103,13 +116,19 @@ with st.sidebar:
         "➕ New Job",
         use_container_width=True
     ):
+
+        st.session_state.job_data = {}
+        st.session_state.calculation_result = {}
+
         st.session_state.page = "New Job"
+
         st.rerun()
 
     if st.button(
         "📋 Job Records",
         use_container_width=True
     ):
+
         st.session_state.page = "Job Records"
         st.rerun()
 
@@ -117,22 +136,30 @@ with st.sidebar:
         "📊 Reports",
         use_container_width=True
     ):
+
         st.session_state.page = "Reports"
         st.rerun()
 
     st.divider()
 
-    st.caption("Engineering Estimation System")
-    st.caption("FYP Prototype • 2026")
+    st.caption(
+        "Engineering Estimation System"
+    )
+
+    st.caption(
+        "FYP Prototype • 2026"
+    )
 
 
 # ============================================================
-# DASHBOARD PAGE
+# DASHBOARD
 # ============================================================
 
 if st.session_state.page == "Dashboard":
 
-    st.title("Maintenance Engineering Estimator")
+    st.title(
+        "Maintenance Engineering Estimator"
+    )
 
     st.write(
         "Industrial Maintenance Job Planning & "
@@ -141,57 +168,59 @@ if st.session_state.page == "Dashboard":
 
     st.divider()
 
-    st.subheader("Dashboard")
-
-    # Get jobs from database
     jobs = get_jobs()
 
     total_jobs = len(jobs)
 
     draft_jobs = sum(
-        1 for job in jobs
+        1
+        for job in jobs
         if job.get("status") == "Draft"
     )
 
     completed_jobs = sum(
-        1 for job in jobs
+        1
+        for job in jobs
         if job.get("status") == "Completed"
     )
 
-    # Dashboard cards
+    st.subheader("Dashboard")
+
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+
         st.metric(
             "Total Jobs",
             total_jobs
         )
 
     with col2:
+
         st.metric(
             "Draft Jobs",
             draft_jobs
         )
 
     with col3:
+
         st.metric(
             "Completed Jobs",
             completed_jobs
         )
 
     with col4:
+
         st.metric(
             "Work Types",
-            "3"
+            3
         )
 
     st.write("")
 
-    # ========================================================
-    # START NEW ESTIMATION
-    # ========================================================
-
-    st.subheader("Start New Estimation")
+    st.subheader(
+        "Start New Estimation"
+    )
 
     left, right = st.columns([3, 1])
 
@@ -209,7 +238,9 @@ if st.session_state.page == "Dashboard":
                 "based on site measurements."
             )
 
-            st.write("**Current Work Modules**")
+            st.write(
+                "**Current Work Modules**"
+            )
 
             st.write(
                 "🎨 Pipe Painting / Coating"
@@ -233,29 +264,27 @@ if st.session_state.page == "Dashboard":
             type="primary",
             use_container_width=True
         ):
+
+            st.session_state.job_data = {}
+            st.session_state.calculation_result = {}
+
             st.session_state.page = "New Job"
+
             st.rerun()
 
     st.write("")
-
-    # ========================================================
-    # RECENT JOBS
-    # ========================================================
 
     st.subheader("Recent Jobs")
 
     if len(jobs) == 0:
 
         st.info(
-            "No job records available. "
-            "Create your first maintenance estimation job."
+            "No job records available."
         )
 
     else:
 
-        recent_jobs = jobs[:5]
-
-        for job in recent_jobs:
+        for job in jobs[:5]:
 
             with st.container(border=True):
 
@@ -266,13 +295,13 @@ if st.session_state.page == "Dashboard":
                 with col1:
 
                     st.write(
-                        f"**{job.get('job_reference', '-') }**"
+                        f"**{job.get('job_reference', '-')}**"
                     )
 
                     st.caption(
                         job.get(
                             "work_type",
-                            "No work type"
+                            "-"
                         )
                     )
 
@@ -281,14 +310,14 @@ if st.session_state.page == "Dashboard":
                     st.write(
                         job.get(
                             "location",
-                            "No location"
+                            "-"
                         )
                     )
 
                     st.caption(
                         job.get(
                             "equipment",
-                            "No equipment"
+                            "-"
                         )
                     )
 
@@ -305,7 +334,9 @@ if st.session_state.page == "Dashboard":
 
 elif st.session_state.page == "New Job":
 
-    st.title("➕ Create New Job")
+    st.title(
+        "➕ Create New Job"
+    )
 
     st.write(
         "Enter the basic information for the "
@@ -314,11 +345,9 @@ elif st.session_state.page == "New Job":
 
     st.divider()
 
-    # ========================================================
-    # JOB INFORMATION
-    # ========================================================
-
-    st.subheader("1. Job Information")
+    st.subheader(
+        "1. Job Information"
+    )
 
     col1, col2 = st.columns(2)
 
@@ -362,11 +391,9 @@ elif st.session_state.page == "New Job":
 
     st.write("")
 
-    # ========================================================
-    # JOB DESCRIPTION
-    # ========================================================
-
-    st.subheader("2. Job Description")
+    st.subheader(
+        "2. Job Description"
+    )
 
     job_description = st.text_area(
         "Scope / Description of Work",
@@ -379,11 +406,7 @@ elif st.session_state.page == "New Job":
 
     st.divider()
 
-    # ========================================================
-    # BUTTONS
-    # ========================================================
-
-    back_col, save_col = st.columns(2)
+    back_col, continue_col = st.columns(2)
 
     with back_col:
 
@@ -391,18 +414,19 @@ elif st.session_state.page == "New Job":
             "← Back to Dashboard",
             use_container_width=True
         ):
+
             st.session_state.page = "Dashboard"
+
             st.rerun()
 
-    with save_col:
+    with continue_col:
 
         if st.button(
-            "💾 Save Job",
+            "Continue to Engineering Input →",
             type="primary",
             use_container_width=True
         ):
 
-            # Validation
             if not job_reference:
 
                 st.warning(
@@ -417,8 +441,7 @@ elif st.session_state.page == "New Job":
 
             else:
 
-                # Prepare data
-                job_data = {
+                st.session_state.job_data = {
 
                     "job_reference":
                         job_reference,
@@ -439,30 +462,495 @@ elif st.session_state.page == "New Job":
                         prepared_by,
 
                     "description":
-                        job_description,
+                        job_description
+                }
+
+                if work_type == "Pipe Painting / Coating":
+
+                    st.session_state.page = (
+                        "Coating Calculation"
+                    )
+
+                elif work_type == "Pipe Insulation":
+
+                    st.session_state.page = (
+                        "Insulation Calculation"
+                    )
+
+                elif work_type == "Insulation Replacement":
+
+                    st.session_state.page = (
+                        "Replacement Calculation"
+                    )
+
+                st.rerun()
+
+
+# ============================================================
+# PIPE PAINTING / COATING CALCULATION
+# ============================================================
+
+elif st.session_state.page == "Coating Calculation":
+
+    job = st.session_state.job_data
+
+    st.title(
+        "🎨 Pipe Painting / Coating"
+    )
+
+    st.write(
+        "Engineering Quantity Estimation"
+    )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # JOB SUMMARY
+    # --------------------------------------------------------
+
+    st.subheader("Job Summary")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        st.write(
+            "**Job Reference**"
+        )
+
+        st.write(
+            job.get(
+                "job_reference",
+                "-"
+            )
+        )
+
+    with col2:
+
+        st.write(
+            "**Location**"
+        )
+
+        st.write(
+            job.get(
+                "location",
+                "-"
+            )
+        )
+
+    with col3:
+
+        st.write(
+            "**Equipment / Tag**"
+        )
+
+        st.write(
+            job.get(
+                "equipment",
+                "-"
+            )
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # PIPE INPUT
+    # --------------------------------------------------------
+
+    st.subheader(
+        "1. Pipe Dimensions"
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        diameter_mm = st.number_input(
+            "Pipe Outside Diameter (mm)",
+            min_value=0.0,
+            value=114.3,
+            step=1.0
+        )
+
+    with col2:
+
+        pipe_length = st.number_input(
+            "Pipe Length (m)",
+            min_value=0.0,
+            value=10.0,
+            step=0.5
+        )
+
+    with col3:
+
+        pipe_quantity = st.number_input(
+            "Number of Pipes",
+            min_value=1,
+            value=1,
+            step=1
+        )
+
+    st.write("")
+
+    # --------------------------------------------------------
+    # COATING INPUT
+    # --------------------------------------------------------
+
+    st.subheader(
+        "2. Coating Parameters"
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        dft = st.number_input(
+            "Required DFT (µm)",
+            min_value=0.0,
+            value=150.0,
+            step=10.0,
+            help=(
+                "Required dry film thickness "
+                "for the coating layer."
+            )
+        )
+
+    with col2:
+
+        volume_solids = st.number_input(
+            "Volume Solids (%)",
+            min_value=1.0,
+            max_value=100.0,
+            value=75.0,
+            step=1.0,
+            help=(
+                "Obtain this value from the "
+                "coating manufacturer's technical data sheet."
+            )
+        )
+
+    st.write("")
+
+    st.caption(
+        "Volume solids and required DFT should be based "
+        "on the applicable coating specification or "
+        "manufacturer technical data."
+    )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # CALCULATE
+    # --------------------------------------------------------
+
+    if st.button(
+        "🧮 CALCULATE ESTIMATION",
+        type="primary",
+        use_container_width=True
+    ):
+
+        if diameter_mm <= 0:
+
+            st.error(
+                "Pipe diameter must be greater than zero."
+            )
+
+        elif pipe_length <= 0:
+
+            st.error(
+                "Pipe length must be greater than zero."
+            )
+
+        else:
+
+            diameter_m = (
+                diameter_mm / 1000
+            )
+
+            surface_area = (
+                math.pi
+                * diameter_m
+                * pipe_length
+                * pipe_quantity
+            )
+
+            wft = (
+                dft
+                / (volume_solids / 100)
+            )
+
+            theoretical_litres = (
+                surface_area
+                * wft
+                / 1000
+            )
+
+            st.session_state.calculation_result = {
+
+                "diameter_mm":
+                    diameter_mm,
+
+                "pipe_length":
+                    pipe_length,
+
+                "pipe_quantity":
+                    pipe_quantity,
+
+                "dft":
+                    dft,
+
+                "volume_solids":
+                    volume_solids,
+
+                "surface_area":
+                    surface_area,
+
+                "wft":
+                    wft,
+
+                "theoretical_litres":
+                    theoretical_litres
+            }
+
+    # --------------------------------------------------------
+    # RESULTS
+    # --------------------------------------------------------
+
+    if st.session_state.calculation_result:
+
+        result = (
+            st.session_state.calculation_result
+        )
+
+        st.write("")
+
+        st.subheader(
+            "3. Engineering Calculation Results"
+        )
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+
+            st.metric(
+                "External Surface Area",
+                f"{result['surface_area']:.2f} m²"
+            )
+
+        with col2:
+
+            st.metric(
+                "Required WFT",
+                f"{result['wft']:.1f} µm"
+            )
+
+        with col3:
+
+            st.metric(
+                "Theoretical Coating Quantity",
+                f"{result['theoretical_litres']:.2f} L"
+            )
+
+        st.write("")
+
+        with st.expander(
+            "📐 View Engineering Calculation"
+        ):
+
+            st.write(
+                "**External Pipe Surface Area**"
+            )
+
+            st.latex(
+                r"A = \pi D L N"
+            )
+
+            st.write(
+                f"A = π × "
+                f"{result['diameter_mm']/1000:.4f} × "
+                f"{result['pipe_length']:.2f} × "
+                f"{result['pipe_quantity']}"
+            )
+
+            st.write(
+                f"**A = "
+                f"{result['surface_area']:.2f} m²**"
+            )
+
+            st.write("---")
+
+            st.write(
+                "**Wet Film Thickness (WFT)**"
+            )
+
+            st.latex(
+                r"WFT = \frac{DFT}{VS/100}"
+            )
+
+            st.write(
+                f"WFT = {result['dft']:.1f} "
+                f"/ ({result['volume_solids']:.1f}/100)"
+            )
+
+            st.write(
+                f"**WFT = "
+                f"{result['wft']:.1f} µm**"
+            )
+
+            st.write("---")
+
+            st.write(
+                "**Theoretical Wet Coating Volume**"
+            )
+
+            st.latex(
+                r"Q = \frac{A \times WFT}{1000}"
+            )
+
+            st.write(
+                f"Q = "
+                f"{result['surface_area']:.2f} × "
+                f"{result['wft']:.1f} / 1000"
+            )
+
+            st.write(
+                f"**Q = "
+                f"{result['theoretical_litres']:.2f} L**"
+            )
+
+        st.info(
+            "The calculated coating quantity is theoretical. "
+            "Actual material requirements may be higher due "
+            "to application losses, surface profile, overspray, "
+            "equipment losses and other project-specific factors."
+        )
+
+        st.divider()
+
+        back_col, save_col = st.columns(2)
+
+        with back_col:
+
+            if st.button(
+                "← Edit Job Information",
+                use_container_width=True
+            ):
+
+                st.session_state.calculation_result = {}
+
+                st.session_state.page = "New Job"
+
+                st.rerun()
+
+        with save_col:
+
+            if st.button(
+                "💾 Save Job & Calculation",
+                type="primary",
+                use_container_width=True
+            ):
+
+                # ------------------------------------------------
+                # At the moment the existing jobs table stores
+                # the main job information.
+                # Calculation values are included in description
+                # until a dedicated calculation table is added.
+                # ------------------------------------------------
+
+                original_description = (
+                    job.get(
+                        "description",
+                        ""
+                    )
+                )
+
+                calculation_summary = (
+                    "\n\n"
+                    "ENGINEERING ESTIMATION\n"
+                    f"Pipe OD: "
+                    f"{result['diameter_mm']:.1f} mm\n"
+                    f"Pipe Length: "
+                    f"{result['pipe_length']:.2f} m\n"
+                    f"Pipe Quantity: "
+                    f"{result['pipe_quantity']}\n"
+                    f"DFT: "
+                    f"{result['dft']:.1f} µm\n"
+                    f"Volume Solids: "
+                    f"{result['volume_solids']:.1f}%\n"
+                    f"Surface Area: "
+                    f"{result['surface_area']:.2f} m²\n"
+                    f"WFT: "
+                    f"{result['wft']:.1f} µm\n"
+                    f"Theoretical Coating Quantity: "
+                    f"{result['theoretical_litres']:.2f} L"
+                )
+
+                database_job = {
+
+                    "job_reference":
+                        job.get(
+                            "job_reference"
+                        ),
+
+                    "location":
+                        job.get(
+                            "location"
+                        ),
+
+                    "equipment":
+                        job.get(
+                            "equipment"
+                        ),
+
+                    "work_type":
+                        job.get(
+                            "work_type"
+                        ),
+
+                    "inspection_date":
+                        job.get(
+                            "inspection_date"
+                        ),
+
+                    "prepared_by":
+                        job.get(
+                            "prepared_by"
+                        ),
+
+                    "description":
+                        original_description
+                        + calculation_summary,
 
                     "status":
                         "Draft"
                 }
 
-                # Save to Supabase
-                success, result = save_job(
-                    job_data
+                success, response = save_job(
+                    database_job
                 )
 
                 if success:
 
                     st.success(
-                        f"Job {job_reference} "
+                        "Job and engineering calculation "
                         "saved successfully!"
                     )
 
                     st.balloons()
 
-                    st.info(
-                        "You can now view this job "
-                        "under Job Records."
-                    )
+                    st.session_state.job_data = {}
+                    st.session_state.calculation_result = {}
+
+                    if st.button(
+                        "📋 View Job Records",
+                        use_container_width=True
+                    ):
+
+                        st.session_state.page = (
+                            "Job Records"
+                        )
+
+                        st.rerun()
 
                 else:
 
@@ -470,20 +958,104 @@ elif st.session_state.page == "New Job":
                         "Unable to save the job."
                     )
 
-                    st.error(result)
+                    st.error(response)
 
 
 # ============================================================
-# JOB RECORDS PAGE
+# PIPE INSULATION
+# ============================================================
+
+elif st.session_state.page == "Insulation Calculation":
+
+    st.title(
+        "🧱 Pipe Insulation"
+    )
+
+    st.write(
+        "Engineering Estimation Module"
+    )
+
+    st.divider()
+
+    st.info(
+        "The Pipe Insulation calculation module "
+        "will be developed in the next stage."
+    )
+
+    st.write(
+        "Planned engineering inputs include:"
+    )
+
+    st.write(
+        "• Pipe outside diameter"
+    )
+
+    st.write(
+        "• Pipe length"
+    )
+
+    st.write(
+        "• Insulation thickness"
+    )
+
+    st.write(
+        "• Number of pipes"
+    )
+
+    st.write(
+        "• Insulation material"
+    )
+
+    if st.button(
+        "← Back to Job Information"
+    ):
+
+        st.session_state.page = "New Job"
+        st.rerun()
+
+
+# ============================================================
+# INSULATION REPLACEMENT
+# ============================================================
+
+elif st.session_state.page == "Replacement Calculation":
+
+    st.title(
+        "🔄 Insulation Replacement"
+    )
+
+    st.write(
+        "Engineering Estimation Module"
+    )
+
+    st.divider()
+
+    st.info(
+        "The Insulation Replacement module "
+        "will be developed in the next stage."
+    )
+
+    if st.button(
+        "← Back to Job Information"
+    ):
+
+        st.session_state.page = "New Job"
+        st.rerun()
+
+
+# ============================================================
+# JOB RECORDS
 # ============================================================
 
 elif st.session_state.page == "Job Records":
 
-    st.title("📋 Job Records")
+    st.title(
+        "📋 Job Records"
+    )
 
     st.write(
         "Saved industrial maintenance "
-        "job records."
+        "engineering job records."
     )
 
     st.divider()
@@ -501,10 +1073,6 @@ elif st.session_state.page == "Job Records":
         st.success(
             f"{len(jobs)} job record(s) found."
         )
-
-        # ----------------------------------------------------
-        # SEARCH
-        # ----------------------------------------------------
 
         search = st.text_input(
             "🔍 Search Jobs",
@@ -524,21 +1092,24 @@ elif st.session_state.page == "Job Records":
 
                 job for job in jobs
 
-                if search_lower in str(
+                if search_lower
+                in str(
                     job.get(
                         "job_reference",
                         ""
                     )
                 ).lower()
 
-                or search_lower in str(
+                or search_lower
+                in str(
                     job.get(
                         "location",
                         ""
                     )
                 ).lower()
 
-                or search_lower in str(
+                or search_lower
+                in str(
                     job.get(
                         "equipment",
                         ""
@@ -547,10 +1118,6 @@ elif st.session_state.page == "Job Records":
             ]
 
         st.write("")
-
-        # ----------------------------------------------------
-        # DISPLAY JOBS
-        # ----------------------------------------------------
 
         for job in filtered_jobs:
 
@@ -601,17 +1168,19 @@ elif st.session_state.page == "Job Records":
 
                     if description:
 
-                        st.write(
-                            "**Description:**"
-                        )
+                        with st.expander(
+                            "View Job Details & Calculation"
+                        ):
 
-                        st.write(
-                            description
-                        )
+                            st.text(
+                                description
+                            )
 
                 with col2:
 
-                    st.write("**Status**")
+                    st.write(
+                        "**Status**"
+                    )
 
                     status = job.get(
                         "status",
@@ -632,16 +1201,18 @@ elif st.session_state.page == "Job Records":
 
 
 # ============================================================
-# REPORTS PAGE
+# REPORTS
 # ============================================================
 
 elif st.session_state.page == "Reports":
 
-    st.title("📊 Reports")
+    st.title(
+        "📊 Reports"
+    )
 
     st.write(
-        "Maintenance engineering "
-        "estimation reports."
+        "Maintenance Engineering "
+        "Estimation Reports"
     )
 
     st.divider()
@@ -659,19 +1230,22 @@ elif st.session_state.page == "Reports":
         total_jobs = len(jobs)
 
         coating_jobs = sum(
-            1 for job in jobs
+            1
+            for job in jobs
             if job.get("work_type")
             == "Pipe Painting / Coating"
         )
 
         insulation_jobs = sum(
-            1 for job in jobs
+            1
+            for job in jobs
             if job.get("work_type")
             == "Pipe Insulation"
         )
 
         replacement_jobs = sum(
-            1 for job in jobs
+            1
+            for job in jobs
             if job.get("work_type")
             == "Insulation Replacement"
         )
@@ -679,24 +1253,28 @@ elif st.session_state.page == "Reports":
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
+
             st.metric(
                 "Total Jobs",
                 total_jobs
             )
 
         with col2:
+
             st.metric(
                 "Painting / Coating",
                 coating_jobs
             )
 
         with col3:
+
             st.metric(
                 "Pipe Insulation",
                 insulation_jobs
             )
 
         with col4:
+
             st.metric(
                 "Insulation Replacement",
                 replacement_jobs
@@ -705,6 +1283,7 @@ elif st.session_state.page == "Reports":
         st.write("")
 
         st.info(
-            "Detailed engineering reports "
-            "will be developed in the next stage."
+            "Detailed engineering reporting "
+            "will be developed after the "
+            "calculation modules are completed."
         )
