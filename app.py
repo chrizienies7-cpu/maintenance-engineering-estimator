@@ -1,8 +1,9 @@
 
 import math
-import streamlit as st
 from datetime import date
-from supabase import create_client, Client
+
+import streamlit as st
+from supabase import create_client
 
 
 # ============================================================
@@ -12,34 +13,15 @@ from supabase import create_client, Client
 st.set_page_config(
     page_title="Maintenance Engineering Estimator",
     page_icon="🔧",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
-
-
-# ============================================================
-# UPPERCASE INPUT STYLING
-# ============================================================
 
 st.markdown(
     """
     <style>
-    /* Show typed text in uppercase */
-    div[data-testid="stTextInput"] input {
-        text-transform: uppercase !important;
-    }
-
+    div[data-testid="stTextInput"] input,
     div[data-testid="stTextArea"] textarea {
         text-transform: uppercase !important;
-    }
-
-    /* Uppercase placeholders */
-    div[data-testid="stTextInput"] input::placeholder {
-        text-transform: uppercase;
-    }
-
-    div[data-testid="stTextArea"] textarea::placeholder {
-        text-transform: uppercase;
     }
     </style>
     """,
@@ -47,8 +29,7 @@ st.markdown(
 )
 
 
-def uppercase(value):
-    """Normalize user-entered text to uppercase."""
+def up(value):
     return str(value or "").strip().upper()
 
 
@@ -57,149 +38,148 @@ def uppercase(value):
 # ============================================================
 
 @st.cache_resource
-def init_supabase():
+def db():
     return create_client(
         st.secrets["SUPABASE_URL"],
         st.secrets["SUPABASE_KEY"]
     )
 
 
-supabase: Client = init_supabase()
+S = db()
 
 
 # ============================================================
 # SESSION STATE
 # ============================================================
 
-defaults = {
-    "page": "Dashboard",
-    "job_data": {},
-    "pipe_items": [],
-    "calculation_results": [],
-    "editing_index": None,
-    "job_saved": False,
-    "saved_job_id": None,
-    "pending_job_id": None,
-    "form_version": 0,
-    "save_message": ""
-}
+DEFAULTS = dict(
+    page="Dashboard",
+    job={},
+    pipes=[],
+    editing=None,
+    form_version=0,
+    results=[],
+    saved_id=None,
+    pending_id=None,
+    save_error=""
+)
 
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+for k, v in DEFAULTS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+def reset():
+    st.session_state.job = {}
+    st.session_state.pipes = []
+    st.session_state.editing = None
+    st.session_state.form_version += 1
+    st.session_state.results = []
+    st.session_state.saved_id = None
+    st.session_state.pending_id = None
+    st.session_state.save_error = ""
+
+
+def nav(page):
+    st.session_state.page = page
+    st.rerun()
 
 
 # ============================================================
 # DATABASE FUNCTIONS
 # ============================================================
 
-def get_jobs():
-    try:
-        response = (
-            supabase.table("jobs")
-            .select("*")
-            .order("created_at", desc=True)
-            .execute()
-        )
-        return response.data or []
+def rows(table, **filters):
+    q = S.table(table).select("*")
 
-    except Exception as error:
-        st.error(f"Unable to retrieve jobs: {error}")
-        return []
+    for k, v in filters.items():
+        q = q.eq(k, v)
+
+    return q.execute().data or []
 
 
-def get_pipe_items(job_id):
-    try:
-        response = (
-            supabase.table("pipe_items")
-            .select("*")
-            .eq("job_id", job_id)
-            .order("id")
-            .execute()
-        )
-        return response.data or []
+def coating_systems():
+    data = rows("coating_systems")
+    result = {}
 
-    except Exception as error:
-        st.error(f"Unable to retrieve pipe tags: {error}")
-        return []
+    for r in data:
+        result.setdefault(
+            r["system_id"], []
+        ).append(r)
 
-
-def save_job(data):
-    try:
-        response = (
-            supabase.table("jobs")
-            .insert(data)
-            .execute()
+    for key in result:
+        result[key].sort(
+            key=lambda r: r["coat_number"]
         )
 
-        if response.data:
-            return True, response.data[0]
-
-        return False, "No job ID returned."
-
-    except Exception as error:
-        return False, str(error)
-
-
-def save_pipe_items(items):
-    try:
-        supabase.table("pipe_items").insert(items).execute()
-        return True, None
-
-    except Exception as error:
-        return False, str(error)
+    return dict(sorted(result.items()))
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# ENGINEERING CALCULATIONS
 # ============================================================
 
-def reset_job():
-    st.session_state.job_data = {}
-    st.session_state.pipe_items = []
-    st.session_state.calculation_results = []
-    st.session_state.editing_index = None
-    st.session_state.job_saved = False
-    st.session_state.saved_job_id = None
-    st.session_state.pending_job_id = None
-    st.session_state.save_message = ""
-    st.session_state.form_version += 1
+def area_for(pipe):
 
+    if pipe["area_method"] == "Whole Pipe":
 
-def calculate_pipe(item):
-    diameter_m = item["outside_diameter_mm"] / 1000
+        return (
+            math.pi
+            * pipe["outside_diameter_mm"]
+            / 1000
+            * pipe["pipe_length_m"]
+            * pipe["pipe_quantity"]
+        )
 
-    area = (
-        math.pi
-        * diameter_m
-        * item["pipe_length_m"]
-        * item["pipe_quantity"]
+    return sum(
+        spot["length_m"]
+        * spot["width_m"]
+        * spot["quantity"]
+        for spot in pipe["spots"]
     )
 
-    wft = item["dft_um"] / (
-        item["volume_solids_pct"] / 100
-    )
 
-    coating = area * wft / 1000
+def calc_pipe(pipe, specs):
 
-    result = item.copy()
-    result["surface_area_m2"] = area
-    result["wft_um"] = wft
-    result["theoretical_coating_l"] = coating
+    area = area_for(pipe)
+    coats = []
 
-    return result
+    if pipe["work_type"] == "Pipe Painting / Coating":
 
+        for row in specs[pipe["system_id"]]:
 
-def calculate_all():
-    st.session_state.calculation_results = [
-        calculate_pipe(item)
-        for item in st.session_state.pipe_items
-    ]
+            coat_no = int(row["coat_number"])
 
+            vs = pipe["volume_solids"][coat_no]
 
-def go_to(page):
-    st.session_state.page = page
-    st.rerun()
+            dft = float(row["nominal_dft_um"])
+
+            wft = dft / (vs / 100)
+
+            coating_l = area * wft / 1000
+
+            coats.append({
+                "coat_number": coat_no,
+                "coating_description":
+                    row["coating_description"],
+                "dft_um": dft,
+                "volume_solids_pct": vs,
+                "wft_um": wft,
+                "theoretical_coating_l": coating_l
+            })
+
+    return {
+        "pipe": pipe,
+        "area": area,
+        "coats": coats,
+        "total_dft": sum(
+            c["dft_um"] for c in coats
+        ),
+        "litres": sum(
+            c["theoretical_coating_l"]
+            for c in coats
+        )
+    }
 
 
 # ============================================================
@@ -207,26 +187,36 @@ def go_to(page):
 # ============================================================
 
 with st.sidebar:
+
     st.title("🔧 KHAL")
-    st.caption("MAINTENANCE ENGINEERING")
+
+    st.caption(
+        "MAINTENANCE ENGINEERING • FYP PROTOTYPE"
+    )
+
+    for title, page in [
+        ("🏠 Dashboard", "Dashboard"),
+        ("➕ New Job", "New Job"),
+        ("📋 Job Records", "Job Records"),
+        ("📊 Reports", "Reports")
+    ]:
+
+        if st.button(
+            title,
+            use_container_width=True
+        ):
+
+            if page == "New Job":
+                reset()
+
+            nav(page)
+
     st.divider()
 
-    if st.button("🏠 Dashboard", use_container_width=True):
-        go_to("Dashboard")
-
-    if st.button("➕ New Job", use_container_width=True):
-        reset_job()
-        go_to("New Job")
-
-    if st.button("📋 Job Records", use_container_width=True):
-        go_to("Job Records")
-
-    if st.button("📊 Reports", use_container_width=True):
-        go_to("Reports")
-
-    st.divider()
-    st.caption("ENGINEERING ESTIMATION SYSTEM")
-    st.caption("FYP PROTOTYPE • 2026")
+    st.caption(
+        "Use fictional data only. "
+        "Anonymous prototype database access is enabled."
+    )
 
 
 # ============================================================
@@ -236,72 +226,53 @@ with st.sidebar:
 if st.session_state.page == "Dashboard":
 
     st.title("Maintenance Engineering Estimator")
+
     st.write(
-        "Industrial Maintenance Job Planning & "
-        "Engineering Quantity Estimation"
-    )
-    st.divider()
-
-    jobs = get_jobs()
-
-    total_jobs = len(jobs)
-    draft_jobs = sum(
-        job.get("status") == "Draft" for job in jobs
-    )
-    completed_jobs = sum(
-        job.get("status") == "Completed" for job in jobs
+        "Job planning and quantity estimation "
+        "for piping coating and insulation maintenance."
     )
 
-    col1, col2, col3, col4 = st.columns(4)
+    try:
 
-    col1.metric("Total Jobs", total_jobs)
-    col2.metric("Draft Jobs", draft_jobs)
-    col3.metric("Completed Jobs", completed_jobs)
-    col4.metric("Work Modules", 3)
+        jobs = rows("jobs")
 
-    st.write("")
-
-    with st.container(border=True):
-        st.subheader("🔧 New Engineering Estimation")
-
-        st.write(
-            "Create a maintenance job, record site visit "
-            "information and calculate engineering quantities "
-            "for multiple pipe tags."
+        st.metric(
+            "Saved Jobs",
+            len(jobs)
         )
 
-        if st.button(
-            "➕ CREATE NEW JOB",
-            type="primary",
-            use_container_width=True
-        ):
-            reset_job()
-            go_to("New Job")
+        if jobs:
 
-    st.subheader("Recent Jobs")
+            st.dataframe(
+                [
+                    {
+                        "Reference":
+                            j.get("job_reference"),
+                        "Work Type":
+                            j.get("work_type"),
+                        "Activity":
+                            j.get("work_activity"),
+                        "Location":
+                            j.get("location")
+                    }
+                    for j in jobs[-15:]
+                ],
+                hide_index=True,
+                use_container_width=True
+            )
 
-    if not jobs:
-        st.info("No job records available.")
+    except Exception as exc:
 
-    for job in jobs[:5]:
-        with st.container(border=True):
-            col1, col2, col3 = st.columns([2, 2, 1])
+        st.error(
+            f"Database connection error: {exc}"
+        )
 
-            with col1:
-                st.write(
-                    f"**{uppercase(job.get('job_reference'))}**"
-                )
-                st.caption(job.get("work_type", "-"))
-
-            with col2:
-                st.write(uppercase(job.get("location")) or "-")
-                st.caption(
-                    "Supervisor: "
-                    + (uppercase(job.get("supervisor")) or "-")
-                )
-
-            with col3:
-                st.write(job.get("status", "Draft"))
+    if st.button(
+        "Create New Job",
+        type="primary"
+    ):
+        reset()
+        nav("New Job")
 
 
 # ============================================================
@@ -310,139 +281,140 @@ if st.session_state.page == "Dashboard":
 
 elif st.session_state.page == "New Job":
 
-    st.title("➕ Create New Job")
-    st.write("Enter the job and site visit information.")
-    st.divider()
+    st.title("New Job / Site Visit")
 
-    old_job = st.session_state.job_data
+    job = st.session_state.job
 
-    work_options = [
-        "Select Work Type",
+    types = [
         "Pipe Painting / Coating",
-        "Pipe Insulation",
-        "Insulation Replacement"
+        "Pipe Insulation"
     ]
 
-    old_work_type = old_job.get(
-        "work_type", "Select Work Type"
-    )
+    activities = [
+        "New",
+        "Replacement",
+        "Spot Repair",
+        "Whole Area"
+    ]
 
-    work_index = (
-        work_options.index(old_work_type)
-        if old_work_type in work_options
-        else 0
-    )
+    with st.form("job_form"):
 
-    old_date = old_job.get("inspection_date")
+        a, b = st.columns(2)
 
-    try:
-        default_date = (
-            date.fromisoformat(old_date)
-            if old_date
-            else date.today()
-        )
-    except ValueError:
-        default_date = date.today()
+        with a:
 
-    with st.form("job_information_form"):
-
-        st.subheader("1. Job Information")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            job_reference = st.text_input(
-                "Job Reference / Work Order *",
-                value=old_job.get("job_reference", ""),
-                placeholder="KH-2026-001"
+            reference = st.text_input(
+                "Job Reference *",
+                value=job.get(
+                    "job_reference", ""
+                ),
+                placeholder="DEMO-001"
             )
 
             location = st.text_input(
-                "Work Location / Area",
-                value=old_job.get("location", ""),
-                placeholder="AREA 5"
+                "Work Location",
+                value=job.get(
+                    "location", ""
+                )
             )
 
             work_type = st.selectbox(
-                "Work Type *",
-                work_options,
-                index=work_index
+                "Work Type",
+                types,
+                index=(
+                    types.index(job["work_type"])
+                    if job.get("work_type") in types
+                    else 0
+                )
             )
 
-        with col2:
-            inspection_date = st.date_input(
-                "Inspection / Site Visit Date",
-                value=default_date
+            activity = st.selectbox(
+                "Work Activity",
+                activities,
+                index=(
+                    activities.index(
+                        job["work_activity"]
+                    )
+                    if job.get("work_activity")
+                    in activities
+                    else 0
+                )
+            )
+
+        with b:
+
+            try:
+                initial_date = date.fromisoformat(
+                    job["inspection_date"]
+                )
+
+            except (KeyError, ValueError):
+                initial_date = date.today()
+
+            visit_date = st.date_input(
+                "Site Visit Date",
+                value=initial_date
             )
 
             supervisor = st.text_input(
                 "Supervisor / Site Visit By *",
-                value=old_job.get("supervisor", ""),
-                placeholder="SUPERVISOR NAME"
+                value=job.get(
+                    "supervisor", ""
+                )
             )
 
-            prepared_by = st.text_input(
+            prepared = st.text_input(
                 "Prepared By",
-                value=old_job.get("prepared_by", ""),
-                placeholder="ESTIMATOR NAME"
+                value=job.get(
+                    "prepared_by", ""
+                )
             )
-
-        st.subheader("2. Job Description")
 
         description = st.text_area(
-            "Scope / Description of Work",
-            value=old_job.get("description", ""),
-            placeholder="EXTERNAL PIPE PAINTING WORK",
-            height=130
+            "Description / Scope",
+            value=job.get(
+                "description", ""
+            )
         )
 
-        st.info(
-            "Pipe tags are entered on the next page. "
-            "One job can contain multiple pipe tags."
-        )
-
-        submitted = st.form_submit_button(
+        submit = st.form_submit_button(
             "Continue to Pipe Tags →",
             type="primary",
             use_container_width=True
         )
 
-    if submitted:
+    if submit:
 
-        if not uppercase(job_reference):
-            st.warning("Please enter the Job Reference.")
+        if not up(reference) or not up(supervisor):
 
-        elif work_type == "Select Work Type":
-            st.warning("Please select a Work Type.")
-
-        elif not uppercase(supervisor):
-            st.warning("Please enter the Supervisor.")
+            st.error(
+                "Job reference and supervisor are required."
+            )
 
         else:
-            new_job_data = {
-                "job_reference": uppercase(job_reference),
-                "location": uppercase(location),
+
+            new_job = {
+                "job_reference": up(reference),
+                "location": up(location),
                 "work_type": work_type,
-                "inspection_date": str(inspection_date),
-                "supervisor": uppercase(supervisor),
-                "prepared_by": uppercase(prepared_by),
-                "description": uppercase(description)
+                "work_activity": activity,
+                "inspection_date": str(visit_date),
+                "supervisor": up(supervisor),
+                "prepared_by": up(prepared),
+                "description": up(description)
             }
 
             if (
-                st.session_state.job_data
-                and new_job_data != st.session_state.job_data
+                job
+                and job["work_type"] != work_type
             ):
-                st.session_state.calculation_results = []
+                st.session_state.pipes = []
 
-            st.session_state.job_data = new_job_data
+            st.session_state.job = new_job
 
-            if work_type == "Pipe Painting / Coating":
-                go_to("Pipe Tags")
-            elif work_type == "Pipe Insulation":
-                go_to("Insulation Placeholder")
-            else:
-                go_to("Replacement Placeholder")
+            st.session_state.results = []
+
+            nav("Pipe Tags")
 
 
 # ============================================================
@@ -451,551 +423,831 @@ elif st.session_state.page == "New Job":
 
 elif st.session_state.page == "Pipe Tags":
 
-    job = st.session_state.job_data
+    job = st.session_state.job
 
     if not job:
-        st.warning("Create a job first.")
-        if st.button("Go to New Job"):
-            go_to("New Job")
+        nav("New Job")
+
+    st.title(job["work_type"])
+
+    st.caption(
+        f"{job['job_reference']} • "
+        f"{job['work_activity']} • "
+        f"{job['location']} • "
+        f"Supervisor: {job['supervisor']}"
+    )
+
+    # --------------------------------------------------------
+    # INSULATION MODULE
+    # --------------------------------------------------------
+
+    if job["work_type"] == "Pipe Insulation":
+
+        st.info(
+            "Insulation measurement and quantity "
+            "calculation will be implemented in the "
+            "next module. This version does not save "
+            "insulation estimations."
+        )
+
+        if st.button("← Edit Job"):
+            nav("New Job")
+
         st.stop()
 
-    st.title("🎨 Pipe Painting / Coating")
-    st.write("Multiple Pipe Tag Engineering Estimation")
-    st.divider()
-
-    st.subheader("Job & Site Visit Information")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Job Reference", job["job_reference"])
-    col2.metric("Location", job["location"] or "-")
-    col3.metric("Supervisor", job["supervisor"])
-    col4.metric("Site Visit Date", job["inspection_date"])
-
-    st.divider()
-
     # --------------------------------------------------------
-    # ADD / EDIT PIPE TAG
+    # LOAD COATING SYSTEMS
     # --------------------------------------------------------
 
-    editing_index = st.session_state.editing_index
-    editing = editing_index is not None
+    try:
+        specs = coating_systems()
+
+    except Exception as exc:
+
+        st.error(
+            f"Cannot read coating specifications: {exc}"
+        )
+
+        st.stop()
+
+    if not specs:
+
+        st.error(
+            "No coating systems found in Supabase. "
+            "Please load your coating reference table."
+        )
+
+        st.stop()
+
+    # --------------------------------------------------------
+    # SAVE STATUS
+    # --------------------------------------------------------
+
+    if st.session_state.saved_id is not None:
+
+        st.success(
+            "Job saved successfully. "
+            f"Job ID: {st.session_state.saved_id}"
+        )
+
+        if st.button(
+            "View Job Records",
+            type="primary"
+        ):
+            nav("Job Records")
+
+        st.stop()
+
+    if st.session_state.pending_id is not None:
+
+        st.warning(
+            "A job record was already created "
+            f"(ID {st.session_state.pending_id}). "
+            "Editing is disabled until its save issue "
+            "is resolved to prevent inconsistent records."
+        )
+
+        st.error(
+            st.session_state.save_error
+        )
+
+        st.stop()
+
+    # --------------------------------------------------------
+    # ADD OR EDIT PIPE
+    # --------------------------------------------------------
+
+    idx = st.session_state.editing
+
+    editing = idx is not None
 
     if editing:
-        existing = st.session_state.pipe_items[editing_index]
-        st.subheader(
-            f"✏️ Edit Pipe Tag: {existing['tag_number']}"
-        )
+
+        existing = st.session_state.pipes[idx]
+
     else:
+
         existing = {
             "tag_number": "",
             "outside_diameter_mm": 114.3,
             "pipe_length_m": 1.0,
             "pipe_quantity": 1,
-            "dft_um": 150.0,
-            "volume_solids_pct": 75.0
+            "area_method": (
+                "Spot Repair"
+                if job["work_activity"] == "Spot Repair"
+                else "Whole Pipe"
+            ),
+            "system_id": list(specs)[0],
+            "volume_solids": {},
+            "spots": []
         }
-        st.subheader("➕ Add Pipe Tag")
 
-    st.caption(
-        "Enter the pipe information and submit the form. "
-        "The page will not rerun while you are typing."
-    )
-
-    form_key = (
-        f"edit_pipe_{editing_index}_"
-        f"{st.session_state.form_version}"
+    st.subheader(
+        "Edit Pipe Tag"
         if editing
-        else f"add_pipe_{st.session_state.form_version}"
+        else "Add Pipe Tag"
     )
+
+    method_options = [
+        "Whole Pipe",
+        "Spot Repair"
+    ]
+
+    systems = list(specs)
+
+    choice_a, choice_b = st.columns(2)
+
+    method = choice_a.selectbox(
+        "Measurement Method",
+        method_options,
+        index=method_options.index(
+            existing["area_method"]
+        ),
+        key=(
+            f"method_"
+            f"{st.session_state.form_version}_{idx}"
+        )
+    )
+
+    system_id = choice_b.selectbox(
+        "Coating System ID",
+        systems,
+        index=(
+            systems.index(existing["system_id"])
+            if existing["system_id"] in systems
+            else 0
+        ),
+        key=(
+            f"system_"
+            f"{st.session_state.form_version}_{idx}"
+        )
+    )
+
+    # Number of spot groups is outside the form,
+    # allowing the required input rows to be generated.
+
+    if method == "Spot Repair":
+
+        count = st.number_input(
+            "Number of spot groups on this pipe tag",
+            min_value=1,
+            max_value=100,
+            value=max(
+                1,
+                len(existing["spots"])
+            ),
+            step=1,
+            key=(
+                f"count_"
+                f"{st.session_state.form_version}_{idx}"
+            )
+        )
+
+    else:
+        count = 0
+
+    # --------------------------------------------------------
+    # PIPE INPUT FORM
+    # --------------------------------------------------------
 
     with st.form(
-        form_key,
-        clear_on_submit=not editing
+        f"pipe_form_"
+        f"{st.session_state.form_version}_{idx}",
+        clear_on_submit=False
     ):
 
-        col1, col2, col3 = st.columns(3)
+        a, b, c = st.columns(3)
 
-        with col1:
-            tag_number = st.text_input(
+        with a:
+
+            tag = st.text_input(
                 "Tag Number *",
-                value=existing["tag_number"],
-                placeholder="4720-P-001"
+                value=existing["tag_number"]
             )
 
-            outside_diameter = st.number_input(
-                "Outside Diameter (mm) *",
+            od = st.number_input(
+                "Pipe Outside Diameter (mm)",
                 min_value=0.01,
                 value=float(
                     existing["outside_diameter_mm"]
                 ),
-                step=1.0,
                 format="%.2f"
             )
 
-        with col2:
-            pipe_length = st.number_input(
-                "Pipe Length (m) *",
+        with b:
+
+            length = st.number_input(
+                "Painted Pipe Length (m)",
                 min_value=0.01,
-                value=float(existing["pipe_length_m"]),
-                step=0.5,
-                format="%.2f"
+                value=float(
+                    existing["pipe_length_m"]
+                ),
+                format="%.2f",
+                help=(
+                    "Used for whole-pipe calculation"
+                )
             )
 
-            pipe_quantity = st.number_input(
-                "Pipe Quantity *",
+            qty = st.number_input(
+                "Number of Pipes",
                 min_value=1,
-                value=int(existing["pipe_quantity"]),
-                step=1
+                value=int(
+                    existing["pipe_quantity"]
+                )
             )
 
-        with col3:
-            dft = st.number_input(
-                "Required DFT (µm) *",
-                min_value=0.1,
-                value=float(existing["dft_um"]),
-                step=10.0,
-                format="%.1f"
+        with c:
+
+            total_dft = sum(
+                float(r["nominal_dft_um"])
+                for r in specs[system_id]
             )
 
-            volume_solids = st.number_input(
-                "Volume Solids (%) *",
+            st.metric(
+                "Total Nominal DFT",
+                f"{total_dft:g} µm"
+            )
+
+        # ----------------------------------------------------
+        # COATING LAYERS
+        # ----------------------------------------------------
+
+        st.markdown(
+            "**Coating layers — DFT from reference, "
+            "volume solids from manufacturer TDS**"
+        )
+
+        volume_solids = {}
+
+        for coat in specs[system_id]:
+
+            no = int(coat["coat_number"])
+
+            ca, cb = st.columns([3, 1])
+
+            ca.write(
+                f"Coat {no}: "
+                f"{coat['coating_description']} "
+                f"— **{coat['nominal_dft_um']:g} "
+                "µm DFT**"
+            )
+
+            if existing["system_id"] == system_id:
+
+                previous_vs = (
+                    existing["volume_solids"].get(
+                        no,
+                        75.0
+                    )
+                )
+
+            else:
+                previous_vs = 75.0
+
+            volume_solids[no] = cb.number_input(
+                f"Coat {no} Volume Solids (%)",
                 min_value=0.1,
                 max_value=100.0,
-                value=float(
-                    existing["volume_solids_pct"]
-                ),
-                step=1.0,
-                format="%.1f"
+                value=float(previous_vs),
+                format="%.1f",
+                key=(
+                    f"vs_"
+                    f"{st.session_state.form_version}_"
+                    f"{idx}_{system_id}_{no}"
+                )
             )
 
-        submit_pipe = st.form_submit_button(
+        st.caption(
+            "Volume solids defaults to 75% for "
+            "demonstration ONLY. Replace every value "
+            "with the relevant paint TDS value before "
+            "using results."
+        )
+
+        # ----------------------------------------------------
+        # MULTIPLE REPAIR SPOTS
+        # ----------------------------------------------------
+
+        spot_rows = []
+
+        if method == "Spot Repair":
+
+            st.markdown("**Repair Spots**")
+
+            st.caption(
+                "Enter the actual measured surface "
+                "length and circumferential width of "
+                "each repair spot. Multiple identical "
+                "spots can be entered using quantity."
+            )
+
+            for i in range(int(count)):
+
+                if i < len(existing["spots"]):
+
+                    prior = existing["spots"][i]
+
+                else:
+
+                    prior = {
+                        "spot_number": f"SP-{i+1:02}",
+                        "length_m": 0.5,
+                        "width_m": 0.3,
+                        "quantity": 1
+                    }
+
+                st.write(
+                    f"**Spot Group {i+1}**"
+                )
+
+                x, y, z, w = st.columns(4)
+
+                spot_no = x.text_input(
+                    "Spot ID",
+                    value=prior["spot_number"],
+                    key=(
+                        f"sn_"
+                        f"{st.session_state.form_version}_"
+                        f"{idx}_{i}"
+                    )
+                )
+
+                sl = y.number_input(
+                    "Length (m)",
+                    min_value=0.001,
+                    value=float(
+                        prior["length_m"]
+                    ),
+                    format="%.3f",
+                    key=(
+                        f"sl_"
+                        f"{st.session_state.form_version}_"
+                        f"{idx}_{i}"
+                    )
+                )
+
+                sw = z.number_input(
+                    "Surface Width (m)",
+                    min_value=0.001,
+                    value=float(
+                        prior["width_m"]
+                    ),
+                    format="%.3f",
+                    key=(
+                        f"sw_"
+                        f"{st.session_state.form_version}_"
+                        f"{idx}_{i}"
+                    )
+                )
+
+                sq = w.number_input(
+                    "Spot Quantity",
+                    min_value=1,
+                    value=int(
+                        prior["quantity"]
+                    ),
+                    key=(
+                        f"sq_"
+                        f"{st.session_state.form_version}_"
+                        f"{idx}_{i}"
+                    )
+                )
+
+                spot_rows.append({
+                    "spot_number": (
+                        up(spot_no)
+                        or f"SP-{i+1:02}"
+                    ),
+                    "length_m": float(sl),
+                    "width_m": float(sw),
+                    "quantity": int(sq)
+                })
+
+        submit = st.form_submit_button(
             "💾 Update Pipe Tag"
             if editing
             else "➕ Add Pipe Tag",
             type="primary",
-            use_container_width=True,
-            disabled=st.session_state.job_saved
+            use_container_width=True
         )
 
     # --------------------------------------------------------
-    # PROCESS FORM
+    # PROCESS PIPE FORM
     # --------------------------------------------------------
 
-    if submit_pipe:
+    if submit:
 
-        clean_tag = uppercase(tag_number)
+        clean = up(tag)
 
-        if not clean_tag:
-            st.warning("Please enter a Tag Number.")
+        if not clean:
 
-        else:
-            duplicate = any(
-                item["tag_number"].upper() == clean_tag
-                and (
-                    not editing
-                    or index != editing_index
-                )
-                for index, item in enumerate(
-                    st.session_state.pipe_items
-                )
+            st.error(
+                "Enter a tag number."
             )
 
-            if duplicate:
-                st.warning(
-                    f"Tag {clean_tag} already exists "
-                    "in this job."
-                )
+        elif any(
+            p["tag_number"] == clean
+            and i != idx
+            for i, p in enumerate(
+                st.session_state.pipes
+            )
+        ):
+
+            st.error(
+                "This tag number already exists "
+                "in the job."
+            )
+
+        elif (
+            method == "Spot Repair"
+            and any(
+                s["width_m"] > math.pi * od / 1000
+                for s in spot_rows
+            )
+        ):
+
+            st.error(
+                "A spot surface width cannot exceed "
+                "the pipe circumference. Split "
+                "unusually large or overlapping "
+                "patches, or use Whole Pipe."
+            )
+
+        else:
+
+            item = {
+                "tag_number": clean,
+                "outside_diameter_mm": float(od),
+                "pipe_length_m": float(length),
+                "pipe_quantity": int(qty),
+                "area_method": method,
+                "system_id": system_id,
+                "volume_solids": volume_solids,
+                "spots": spot_rows,
+                "work_type": job["work_type"]
+            }
+
+            if editing:
+
+                st.session_state.pipes[idx] = item
 
             else:
-                new_item = {
-                    "tag_number": clean_tag,
-                    "outside_diameter_mm": float(
-                        outside_diameter
-                    ),
-                    "pipe_length_m": float(pipe_length),
-                    "pipe_quantity": int(pipe_quantity),
-                    "dft_um": float(dft),
-                    "volume_solids_pct": float(
-                        volume_solids
-                    )
-                }
 
-                if editing:
-                    st.session_state.pipe_items[
-                        editing_index
-                    ] = new_item
-                    st.session_state.editing_index = None
+                st.session_state.pipes.append(item)
 
-                else:
-                    st.session_state.pipe_items.append(
-                        new_item
-                    )
+            st.session_state.editing = None
+            st.session_state.results = []
+            st.session_state.form_version += 1
 
-                st.session_state.calculation_results = []
-                st.session_state.form_version += 1
-                st.rerun()
-
-    if editing:
-        if st.button("Cancel Editing"):
-            st.session_state.editing_index = None
             st.rerun()
 
-    st.divider()
+    if editing:
+
+        if st.button("Cancel Editing"):
+
+            st.session_state.editing = None
+            st.session_state.form_version += 1
+
+            st.rerun()
 
     # --------------------------------------------------------
     # ADDED PIPE TAGS
     # --------------------------------------------------------
 
+    st.divider()
+
     st.subheader(
-        f"Added Pipe Tags "
-        f"({len(st.session_state.pipe_items)})"
+        "Added Pipe Tags "
+        f"({len(st.session_state.pipes)})"
     )
 
-    if not st.session_state.pipe_items:
-        st.info("No pipe tags added yet.")
+    for i, pipe in enumerate(
+        st.session_state.pipes
+    ):
 
-    else:
-        for index, item in enumerate(
-            st.session_state.pipe_items
+        a, b, c, d = st.columns(
+            [3, 3, 1, 1]
+        )
+
+        a.write(
+            f"**{i+1}. {pipe['tag_number']}**"
+        )
+
+        b.write(
+            f"{pipe['system_id']} • "
+            f"{pipe['area_method']} • "
+            f"{area_for(pipe):.3f} m²"
+        )
+
+        if c.button(
+            "Edit",
+            key=f"edit_{i}"
         ):
 
-            with st.container(border=True):
+            st.session_state.editing = i
+            st.session_state.form_version += 1
 
-                col1, col2, col3, col4 = st.columns(
-                    [2.5, 4, 1, 1]
-                )
-
-                with col1:
-                    st.write(
-                        f"**{index + 1}. "
-                        f"{item['tag_number']}**"
-                    )
-                    st.caption(
-                        f"OD: "
-                        f"{item['outside_diameter_mm']:.2f} mm"
-                    )
-
-                with col2:
-                    st.write(
-                        f"Length: "
-                        f"**{item['pipe_length_m']:.2f} m** "
-                        f"| Qty: "
-                        f"**{item['pipe_quantity']}**"
-                    )
-
-                    st.caption(
-                        f"DFT: {item['dft_um']:.1f} µm "
-                        f"• VS: "
-                        f"{item['volume_solids_pct']:.1f}%"
-                    )
-
-                with col3:
-                    if st.button(
-                        "✏️ Edit",
-                        key=f"edit_{index}",
-                        disabled=st.session_state.job_saved,
-                        use_container_width=True
-                    ):
-                        st.session_state.editing_index = index
-                        st.rerun()
-
-                with col4:
-                    if st.button(
-                        "🗑️ Delete",
-                        key=f"delete_{index}",
-                        disabled=st.session_state.job_saved,
-                        use_container_width=True
-                    ):
-                        st.session_state.pipe_items.pop(index)
-                        st.session_state.calculation_results = []
-                        st.session_state.editing_index = None
-                        st.rerun()
-
-    st.write("")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button(
-            "← Edit Job Information",
-            use_container_width=True,
-            disabled=st.session_state.job_saved
-        ):
-            st.session_state.editing_index = None
-            go_to("New Job")
-
-    with col2:
-        if st.button(
-            "🧮 Calculate All Pipe Tags",
-            type="primary",
-            use_container_width=True,
-            disabled=(
-                not st.session_state.pipe_items
-                or st.session_state.job_saved
-            )
-        ):
-            calculate_all()
             st.rerun()
+
+        if d.button(
+            "Delete",
+            key=f"del_{i}"
+        ):
+
+            st.session_state.pipes.pop(i)
+            st.session_state.editing = None
+            st.session_state.results = []
+            st.session_state.form_version += 1
+
+            st.rerun()
+
+    # --------------------------------------------------------
+    # CALCULATE
+    # --------------------------------------------------------
+
+    a, b = st.columns(2)
+
+    if a.button(
+        "← Edit Job Information",
+        use_container_width=True
+    ):
+        nav("New Job")
+
+    if b.button(
+        "🧮 Calculate All Pipe Tags",
+        type="primary",
+        disabled=not st.session_state.pipes,
+        use_container_width=True
+    ):
+
+        st.session_state.results = [
+            calc_pipe(p, specs)
+            for p in st.session_state.pipes
+        ]
+
+        st.rerun()
 
     # --------------------------------------------------------
     # CALCULATION RESULTS
     # --------------------------------------------------------
 
-    results = st.session_state.calculation_results
+    if st.session_state.results:
 
-    if results:
         st.divider()
-        st.subheader("📐 Engineering Estimation Results")
 
-        result_table = []
+        st.subheader(
+            "Engineering Estimation Results"
+        )
 
-        for item in results:
-            result_table.append({
-                "Tag Number": item["tag_number"],
-                "OD (mm)": round(
-                    item["outside_diameter_mm"], 2
+        summaries = []
+        layers = []
+
+        for result in st.session_state.results:
+
+            pipe = result["pipe"]
+
+            summaries.append({
+                "Tag": pipe["tag_number"],
+                "System": pipe["system_id"],
+                "Method": pipe["area_method"],
+                "Spot Groups": len(
+                    pipe["spots"]
                 ),
-                "Length (m)": round(
-                    item["pipe_length_m"], 2
+                "Area (m²)": round(
+                    result["area"], 3
                 ),
-                "Qty": item["pipe_quantity"],
-                "DFT (µm)": round(item["dft_um"], 1),
-                "VS (%)": round(
-                    item["volume_solids_pct"], 1
-                ),
-                "Surface Area (m²)": round(
-                    item["surface_area_m2"], 2
-                ),
-                "WFT (µm)": round(item["wft_um"], 1),
-                "Theoretical Coating (L)": round(
-                    item["theoretical_coating_l"], 2
+                "Total DFT (µm)":
+                    result["total_dft"],
+                "Theoretical Total (L)": round(
+                    result["litres"], 3
                 )
             })
 
+            for coat in result["coats"]:
+
+                layers.append({
+                    "Tag": pipe["tag_number"],
+                    "Coat": coat["coat_number"],
+                    "Coating":
+                        coat["coating_description"],
+                    "DFT (µm)": coat["dft_um"],
+                    "Volume Solids (%)":
+                        coat["volume_solids_pct"],
+                    "WFT (µm)": round(
+                        coat["wft_um"], 2
+                    ),
+                    "Theoretical (L)": round(
+                        coat["theoretical_coating_l"],
+                        3
+                    )
+                })
+
         st.dataframe(
-            result_table,
+            summaries,
             use_container_width=True,
             hide_index=True
         )
 
-        total_tags = len(results)
-
-        total_quantity = sum(
-            item["pipe_quantity"] for item in results
+        st.subheader(
+            "Coat-by-Coat Calculation"
         )
 
-        total_length = sum(
-            item["pipe_length_m"] * item["pipe_quantity"]
-            for item in results
+        st.dataframe(
+            layers,
+            use_container_width=True,
+            hide_index=True
         )
 
         total_area = sum(
-            item["surface_area_m2"] for item in results
+            r["area"]
+            for r in st.session_state.results
         )
 
-        total_coating = sum(
-            item["theoretical_coating_l"]
-            for item in results
+        total_l = sum(
+            r["litres"]
+            for r in st.session_state.results
         )
 
-        st.subheader("Overall Job Summary")
+        a, b, c = st.columns(3)
 
-        col1, col2, col3, col4, col5 = st.columns(5)
+        a.metric(
+            "Pipe Tags",
+            len(st.session_state.results)
+        )
 
-        col1.metric("Pipe Tags", total_tags)
-        col2.metric("Pipe Quantity", total_quantity)
-        col3.metric(
-            "Total Length", f"{total_length:.2f} m"
+        b.metric(
+            "Total Coating Area",
+            f"{total_area:.3f} m²"
         )
-        col4.metric(
-            "Surface Area", f"{total_area:.2f} m²"
-        )
-        col5.metric(
-            "Theoretical Coating",
-            f"{total_coating:.2f} L"
+
+        c.metric(
+            "Total Theoretical Coating",
+            f"{total_l:.3f} L"
         )
 
         with st.expander(
-            "📐 View Engineering Calculation Method"
+            "Calculation Formulas"
         ):
-            st.write("**External Pipe Surface Area**")
-            st.latex(r"A = \pi D L N")
 
-            st.write(
-                "D = outside diameter (m), "
-                "L = length (m), N = quantity"
+            st.latex(
+                r"A_{whole}=\pi D L N"
             )
 
-            st.write("**Wet Film Thickness**")
-            st.latex(r"WFT = \frac{DFT}{VS/100}")
+            st.latex(
+                r"A_{spots}=\sum (l_i w_i n_i)"
+            )
 
-            st.write("**Theoretical Coating Quantity**")
-            st.latex(r"Q = \frac{A \times WFT}{1000}")
+            st.latex(
+                r"WFT_i=\frac{DFT_i}{VS_i/100}"
+            )
+
+            st.latex(
+                r"Q_i=\frac{A\times WFT_i}{1000}"
+            )
 
         st.warning(
-            "Coating quantities are theoretical and "
-            "exclude application losses, overspray and "
-            "other project-specific allowances."
+            "Theoretical wet paint quantity only. "
+            "No wastage or overspray allowance. "
+            "Confirm the applicable PETRONAS "
+            "specification revision and project "
+            "requirements. Volume solids defaults "
+            "are illustrative, not verified "
+            "manufacturer values."
         )
 
-        st.divider()
-
         # ----------------------------------------------------
-        # SAVE JOB AND PIPE ITEMS
+        # SAVE JOB
         # ----------------------------------------------------
 
-        if st.session_state.job_saved:
+        if st.button(
+            "💾 Save Job & Estimation",
+            type="primary",
+            use_container_width=True
+        ):
 
-            st.success(
-                "✅ Job and pipe tags saved successfully."
-            )
+            try:
 
-            st.write(
-                "Database Job ID: "
-                f"**{st.session_state.saved_job_id}**"
-            )
+                if st.session_state.pending_id is None:
 
-            if st.button(
-                "📋 Go to Job Records",
-                type="primary",
-                use_container_width=True
-            ):
-                reset_job()
-                go_to("Job Records")
+                    job_row = dict(
+                        st.session_state.job
+                    )
 
-        else:
+                    job_row["status"] = "Draft"
 
-            if st.session_state.pending_job_id:
-                st.warning(
-                    "The job record was created earlier, "
-                    "but the pipe tags were not confirmed "
-                    "as saved. Retry will use the existing "
-                    "job ID rather than creating another job."
-                )
+                    response = (
+                        S.table("jobs")
+                        .insert(job_row)
+                        .execute()
+                    )
 
-            if st.button(
-                "💾 Save Job & Engineering Estimation",
-                type="primary",
-                use_container_width=True
-            ):
+                    st.session_state.pending_id = (
+                        response.data[0]["id"]
+                    )
 
-                job_id = st.session_state.pending_job_id
+                job_id = st.session_state.pending_id
 
-                if job_id is None:
+                # Save each pipe, then its spots
+                # and coating layers.
 
-                    database_job = {
-                        "job_reference": job["job_reference"],
-                        "location": job["location"],
-                        "equipment": None,
-                        "work_type": job["work_type"],
-                        "inspection_date": job[
-                            "inspection_date"
-                        ],
-                        "supervisor": job["supervisor"],
-                        "prepared_by": job["prepared_by"],
-                        "description": job["description"],
-                        "status": "Draft"
+                for result in st.session_state.results:
+
+                    pipe = result["pipe"]
+
+                    parent = {
+                        "job_id": job_id,
+                        "tag_number":
+                            pipe["tag_number"],
+                        "outside_diameter_mm":
+                            pipe["outside_diameter_mm"],
+                        "pipe_length_m":
+                            pipe["pipe_length_m"],
+                        "pipe_quantity":
+                            pipe["pipe_quantity"],
+                        "dft_um":
+                            result["total_dft"],
+                        "volume_solids_pct": None,
+                        "surface_area_m2":
+                            result["area"],
+                        "wft_um": None,
+                        "theoretical_coating_l":
+                            result["litres"],
+                        "coating_system_id":
+                            pipe["system_id"],
+                        "area_method":
+                            pipe["area_method"]
                     }
 
-                    success, saved_job = save_job(
-                        database_job
+                    response = (
+                        S.table("pipe_items")
+                        .insert(parent)
+                        .execute()
                     )
 
-                    if not success:
-                        st.error(
-                            f"Unable to save job: {saved_job}"
+                    pipe_id = response.data[0]["id"]
+
+                    # Save repair spots
+
+                    if pipe["spots"]:
+
+                        spot_payload = []
+
+                        for spot in pipe["spots"]:
+
+                            spot_payload.append({
+                                "pipe_item_id": pipe_id,
+                                "spot_number":
+                                    spot["spot_number"],
+                                "spot_length_m":
+                                    spot["length_m"],
+                                "spot_width_m":
+                                    spot["width_m"],
+                                "spot_quantity":
+                                    spot["quantity"],
+                                "spot_area_m2":
+                                    spot["length_m"]
+                                    * spot["width_m"]
+                                    * spot["quantity"]
+                            })
+
+                        (
+                            S.table("pipe_spots")
+                            .insert(spot_payload)
+                            .execute()
                         )
-                        st.stop()
 
-                    job_id = saved_job["id"]
+                    # Save coating layers
 
-                    st.session_state.pending_job_id = job_id
+                    coat_payload = [
+                        {
+                            "pipe_item_id": pipe_id,
+                            **coat
+                        }
+                        for coat in result["coats"]
+                    ]
 
-                database_items = []
-
-                for item in results:
-                    database_items.append({
-                        "job_id": job_id,
-                        "tag_number": item["tag_number"],
-                        "outside_diameter_mm": item[
-                            "outside_diameter_mm"
-                        ],
-                        "pipe_length_m": item[
-                            "pipe_length_m"
-                        ],
-                        "pipe_quantity": item[
-                            "pipe_quantity"
-                        ],
-                        "dft_um": item["dft_um"],
-                        "volume_solids_pct": item[
-                            "volume_solids_pct"
-                        ],
-                        "surface_area_m2": item[
-                            "surface_area_m2"
-                        ],
-                        "wft_um": item["wft_um"],
-                        "theoretical_coating_l": item[
-                            "theoretical_coating_l"
-                        ]
-                    })
-
-                # Check for existing tags in case an earlier
-                # database response was interrupted.
-                existing_items = get_pipe_items(job_id)
-
-                if existing_items:
-                    st.warning(
-                        "Pipe records already exist for "
-                        "this job. Automatic retry has been "
-                        "stopped to avoid duplicate entries."
+                    (
+                        S.table("coating_estimations")
+                        .insert(coat_payload)
+                        .execute()
                     )
 
-                else:
-                    pipe_success, pipe_error = (
-                        save_pipe_items(database_items)
-                    )
+                st.session_state.saved_id = job_id
+                st.session_state.pending_id = None
 
-                    if pipe_success:
-                        st.session_state.job_saved = True
-                        st.session_state.saved_job_id = job_id
-                        st.session_state.pending_job_id = None
-                        st.rerun()
+                st.rerun()
 
-                    else:
-                        st.error(
-                            "The job was created, but pipe "
-                            "items could not be saved."
-                        )
-                        st.error(pipe_error)
+            except Exception as exc:
 
+                st.session_state.save_error = (
+                    f"{exc}. Some records may have "
+                    "been saved. Do not press Save "
+                    "again; inspect Supabase first."
+                )
 
-# ============================================================
-# INSULATION PLACEHOLDERS
-# ============================================================
-
-elif st.session_state.page == "Insulation Placeholder":
-
-    st.title("🧱 Pipe Insulation")
-    st.info(
-        "Pipe Insulation calculations will be "
-        "added in the next development stage."
-    )
-
-    if st.button("← Back to Job Information"):
-        go_to("New Job")
-
-
-elif st.session_state.page == "Replacement Placeholder":
-
-    st.title("🔄 Insulation Replacement")
-    st.info(
-        "Insulation Replacement calculations will "
-        "be added in the next development stage."
-    )
-
-    if st.button("← Back to Job Information"):
-        go_to("New Job")
+                st.error(
+                    st.session_state.save_error
+                )
 
 
 # ============================================================
@@ -1004,175 +1256,168 @@ elif st.session_state.page == "Replacement Placeholder":
 
 elif st.session_state.page == "Job Records":
 
-    st.title("📋 Job Records")
-    st.write(
-        "Saved maintenance jobs and pipe estimations."
-    )
-    st.divider()
+    st.title("Job Records")
 
-    jobs = get_jobs()
+    try:
 
-    if not jobs:
-        st.info("No job records found.")
-
-    else:
-        search = st.text_input(
-            "🔍 Search Jobs",
-            placeholder=(
-                "JOB REFERENCE, LOCATION, "
-                "SUPERVISOR OR WORK TYPE"
-            )
+        jobs = sorted(
+            rows("jobs"),
+            key=lambda j: j.get("id", 0),
+            reverse=True
         )
 
-        query = uppercase(search)
+        query = up(
+            st.text_input("Search Jobs")
+        )
 
-        filtered_jobs = [
-            job for job in jobs
-            if not query or any(
-                query in uppercase(job.get(field))
-                for field in [
+        for job in jobs:
+
+            if query and not any(
+                query in up(job.get(k))
+                for k in (
                     "job_reference",
                     "location",
                     "supervisor",
                     "work_type"
-                ]
-            )
-        ]
+                )
+            ):
+                continue
 
-        st.caption(
-            f"{len(filtered_jobs)} job record(s) shown"
-        )
+            with st.expander(
+                f"{up(job.get('job_reference')) or 'UNTITLED'} "
+                f"• {job.get('work_type') or '-'} "
+                f"• {job.get('work_activity') or '-'}"
+            ):
 
-        for job in filtered_jobs:
-
-            pipe_records = get_pipe_items(job["id"])
-
-            with st.container(border=True):
-
-                col1, col2, col3 = st.columns(
-                    [2, 2, 1]
+                st.write(
+                    f"**Location:** "
+                    f"{up(job.get('location')) or '-'} "
+                    f"| **Supervisor:** "
+                    f"{up(job.get('supervisor')) or '-'} "
+                    f"| **Status:** "
+                    f"{job.get('status') or '-'}"
                 )
 
-                with col1:
-                    st.subheader(
-                        uppercase(job.get("job_reference"))
-                    )
-                    st.write(
-                        f"**Work Type:** "
-                        f"{job.get('work_type', '-')}"
-                    )
-                    st.write(
-                        f"**Location:** "
-                        f"{uppercase(job.get('location')) or '-'}"
-                    )
+                pipes = rows(
+                    "pipe_items",
+                    job_id=job["id"]
+                )
 
-                with col2:
-                    st.write(
-                        f"**Site Visit Date:** "
-                        f"{job.get('inspection_date', '-')}"
-                    )
-                    st.write(
-                        f"**Supervisor:** "
-                        f"{uppercase(job.get('supervisor')) or '-'}"
-                    )
-                    st.write(
-                        f"**Prepared By:** "
-                        f"{uppercase(job.get('prepared_by')) or '-'}"
-                    )
+                if not pipes:
 
-                with col3:
-                    st.write("**Status**")
-                    st.write(job.get("status", "Draft"))
-                    st.metric(
-                        "Pipe Tags",
-                        len(pipe_records)
-                    )
-
-                if pipe_records:
-
-                    total_area = sum(
-                        item.get("surface_area_m2") or 0
-                        for item in pipe_records
-                    )
-
-                    total_coating = sum(
-                        item.get("theoretical_coating_l") or 0
-                        for item in pipe_records
-                    )
-
-                    with st.expander(
-                        "View Engineering Estimation"
-                    ):
-
-                        col_a, col_b, col_c = st.columns(3)
-
-                        col_a.metric(
-                            "Pipe Tags",
-                            len(pipe_records)
-                        )
-                        col_b.metric(
-                            "Surface Area",
-                            f"{total_area:.2f} m²"
-                        )
-                        col_c.metric(
-                            "Theoretical Coating",
-                            f"{total_coating:.2f} L"
-                        )
-
-                        table = []
-
-                        for item in pipe_records:
-                            table.append({
-                                "Tag": uppercase(
-                                    item.get("tag_number")
-                                ),
-                                "OD (mm)": item.get(
-                                    "outside_diameter_mm"
-                                ),
-                                "Length (m)": item.get(
-                                    "pipe_length_m"
-                                ),
-                                "Qty": item.get(
-                                    "pipe_quantity"
-                                ),
-                                "DFT (µm)": item.get(
-                                    "dft_um"
-                                ),
-                                "VS (%)": item.get(
-                                    "volume_solids_pct"
-                                ),
-                                "Area (m²)": round(
-                                    item.get(
-                                        "surface_area_m2"
-                                    ) or 0, 2
-                                ),
-                                "WFT (µm)": round(
-                                    item.get("wft_um") or 0, 1
-                                ),
-                                "Coating (L)": round(
-                                    item.get(
-                                        "theoretical_coating_l"
-                                    ) or 0, 2
-                                )
-                            })
-
-                        st.dataframe(
-                            table,
-                            use_container_width=True,
-                            hide_index=True
-                        )
-
-                        if job.get("description"):
-                            st.write("**Job Description / Scope**")
-                            st.write(
-                                uppercase(job["description"])
-                            )
-
-                else:
-                    st.caption(
-                        "No pipe tag estimation stored "
+                    st.info(
+                        "No pipe estimation data saved "
                         "for this job."
                     )
+
+                else:
+
+                    st.dataframe(
+                        [
+                            {
+                                "Tag":
+                                    up(p.get("tag_number")),
+                                "System":
+                                    p.get("coating_system_id"),
+                                "Area Method":
+                                    p.get("area_method"),
+                                "Area (m²)":
+                                    p.get("surface_area_m2"),
+                                "Total DFT (µm)":
+                                    p.get("dft_um"),
+                                "Total Coating (L)":
+                                    p.get(
+                                        "theoretical_coating_l"
+                                    )
+                            }
+                            for p in pipes
+                        ],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    for p in pipes:
+
+                        spots = rows(
+                            "pipe_spots",
+                            pipe_item_id=p["id"]
+                        )
+
+                        coats = rows(
+                            "coating_estimations",
+                            pipe_item_id=p["id"]
+                        )
+
+                        if spots or coats:
+
+                            st.markdown(
+                                f"**{up(p.get('tag_number'))} "
+                                "— Detail**"
+                            )
+
+                            if spots:
+
+                                st.caption(
+                                    "Spot Repair Measurements"
+                                )
+
+                                st.dataframe(
+                                    [
+                                        {
+                                            "Spot":
+                                                up(s["spot_number"]),
+                                            "Length (m)":
+                                                s["spot_length_m"],
+                                            "Width (m)":
+                                                s["spot_width_m"],
+                                            "Quantity":
+                                                s["spot_quantity"],
+                                            "Area (m²)":
+                                                s["spot_area_m2"]
+                                        }
+                                        for s in spots
+                                    ],
+                                    hide_index=True,
+                                    use_container_width=True
+                                )
+
+                            if coats:
+
+                                st.caption(
+                                    "Individual Coating Layers"
+                                )
+
+                                st.dataframe(
+                                    [
+                                        {
+                                            "Coat":
+                                                c["coat_number"],
+                                            "Coating":
+                                                c["coating_description"],
+                                            "DFT (µm)":
+                                                c["dft_um"],
+                                            "Volume Solids (%)":
+                                                c["volume_solids_pct"],
+                                            "WFT (µm)":
+                                                c["wft_um"],
+                                            "Theoretical (L)":
+                                                c["theoretical_coating_l"]
+                                        }
+                                        for c in sorted(
+                                            coats,
+                                            key=lambda c:
+                                                c["coat_number"]
+                                        )
+                                    ],
+                                    hide_index=True,
+                                    use_container_width=True
+                                )
+
+    except Exception as exc:
+
+        st.error(
+            f"Unable to retrieve job records: {exc}"
+        )
 
 
 # ============================================================
@@ -1181,71 +1426,43 @@ elif st.session_state.page == "Job Records":
 
 elif st.session_state.page == "Reports":
 
-    st.title("📊 Reports")
-    st.write("Maintenance Engineering Estimation Summary")
-    st.divider()
-
-    jobs = get_jobs()
+    st.title("Reports")
 
     try:
-        response = (
-            supabase.table("pipe_items")
-            .select("*")
-            .execute()
+
+        jobs = rows("jobs")
+        pipes = rows("pipe_items")
+
+        a, b, c, d = st.columns(4)
+
+        a.metric(
+            "Total Jobs",
+            len(jobs)
         )
-        all_items = response.data or []
 
-    except Exception as error:
-        st.warning(
-            f"Unable to retrieve report data: {error}"
+        b.metric(
+            "Pipe Tags",
+            len(pipes)
         )
-        all_items = []
 
-    total_area = sum(
-        item.get("surface_area_m2") or 0
-        for item in all_items
-    )
+        c.metric(
+            "Estimated Area",
+            f"{sum(float(p.get('surface_area_m2') or 0) for p in pipes):.2f} m²"
+        )
 
-    total_coating = sum(
-        item.get("theoretical_coating_l") or 0
-        for item in all_items
-    )
+        d.metric(
+            "Theoretical Coating",
+            f"{sum(float(p.get('theoretical_coating_l') or 0) for p in pipes):.2f} L"
+        )
 
-    painting_jobs = sum(
-        job.get("work_type") == "Pipe Painting / Coating"
-        for job in jobs
-    )
+        st.caption(
+            "Prototype summary. Database API result "
+            "limits may require pagination for "
+            "larger datasets."
+        )
 
-    insulation_jobs = sum(
-        job.get("work_type") == "Pipe Insulation"
-        for job in jobs
-    )
+    except Exception as exc:
 
-    replacement_jobs = sum(
-        job.get("work_type") == "Insulation Replacement"
-        for job in jobs
-    )
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Total Jobs", len(jobs))
-    col2.metric("Painting Jobs", painting_jobs)
-    col3.metric("Total Pipe Tags", len(all_items))
-    col4.metric(
-        "Total Surface Area",
-        f"{total_area:.2f} m²"
-    )
-
-    col5, col6, col7 = st.columns(3)
-
-    col5.metric(
-        "Theoretical Coating",
-        f"{total_coating:.2f} L"
-    )
-    col6.metric("Insulation Jobs", insulation_jobs)
-    col7.metric("Replacement Jobs", replacement_jobs)
-
-    st.info(
-        "Additional reporting and insulation "
-        "calculations will be developed later."
-    )
+        st.error(
+            f"Unable to load reports: {exc}"
+        )
